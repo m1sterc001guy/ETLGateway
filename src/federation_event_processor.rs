@@ -10,7 +10,7 @@ use tracing::warn;
 use crate::{
     parse_log_id, CompleteLightningPaymentSucceeded, DbConnection, LNv1IncomingPaymentFailed,
     LNv1IncomingPaymentStarted, LNv1IncomingPaymentSucceeded, LNv1OutgoingPaymentFailed,
-    LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded,
+    LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded, TelegramClient,
 };
 
 pub(crate) struct FederationEventProcessor {
@@ -19,6 +19,7 @@ pub(crate) struct FederationEventProcessor {
     max_log_id: i64,
     pg_client: Client,
     gw_client: GatewayRpcClient,
+    telegram_client: TelegramClient,
     outgoing_payment_started_count: u64,
     outgoing_payment_succeeded_count: u64,
     outgoing_payment_failed_count: u64,
@@ -32,12 +33,11 @@ impl fmt::Display for FederationEventProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Federation: {}\nMax Log ID: {}\n\
+            "Federation: {}\n\
             Outgoing Payments - Started: {}, Succeeded: {}, Failed: {}\n\
             Incoming Payments - Started: {}, Succeeded: {}, Failed: {}\n\
-            Complete Lightning Payments Succeeded: {}",
+            Complete Lightning Payments Succeeded: {}\n\n",
             self.federation_name,
-            self.max_log_id,
             self.outgoing_payment_started_count,
             self.outgoing_payment_succeeded_count,
             self.outgoing_payment_failed_count,
@@ -54,6 +54,7 @@ impl FederationEventProcessor {
         fed_info: FederationInfo,
         db_conn: DbConnection,
         gw_client: GatewayRpcClient,
+        telegram_client: TelegramClient,
     ) -> anyhow::Result<FederationEventProcessor> {
         let pg_client = db_conn.connect().await?;
         let max_log_id = Self::get_max_log_id(&pg_client, fed_info.federation_id).await?;
@@ -65,6 +66,7 @@ impl FederationEventProcessor {
             max_log_id,
             pg_client,
             gw_client,
+            telegram_client,
             outgoing_payment_started_count: 0,
             outgoing_payment_succeeded_count: 0,
             outgoing_payment_failed_count: 0,
@@ -73,6 +75,16 @@ impl FederationEventProcessor {
             incoming_payment_failed_count: 0,
             complete_lightning_payment_succeeded_count: 0,
         })
+    }
+
+    pub fn total_events(&self) -> u64 {
+        self.outgoing_payment_started_count
+            + self.outgoing_payment_succeeded_count
+            + self.outgoing_payment_failed_count
+            + self.incoming_payment_started_count
+            + self.incoming_payment_succeeded_count
+            + self.incoming_payment_failed_count
+            + self.complete_lightning_payment_succeeded_count
     }
 
     async fn get_max_log_id(
@@ -132,9 +144,15 @@ impl FederationEventProcessor {
                 }
                 Some((module, _)) => {
                     warn!(module = %module, "Unsupported module");
+                    self.telegram_client
+                        .send_telegram_message(format!("Found unsupported module: {module}"))
+                        .await;
                 }
                 None => {
                     warn!("No module provided");
+                    self.telegram_client
+                        .send_telegram_message("Found event without a module".to_string())
+                        .await;
                 }
             }
         }

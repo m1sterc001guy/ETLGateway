@@ -11,6 +11,7 @@ use ln_gateway::rpc::rpc_client::GatewayRpcClient;
 use outgoing::{
     LNv1OutgoingPaymentFailed, LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded,
 };
+use serde_json::json;
 use tokio_postgres::{Client, NoTls};
 use tracing::{error, info};
 
@@ -55,17 +56,69 @@ async fn main() -> anyhow::Result<()> {
     let opts = GatewayETLOpts::parse();
     let conn = DbConnection::from_opts(&opts);
 
+    let telegram_client = TelegramClient::from_opts(&opts);
     let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
     let info = client.get_info().await?;
+    let mut message = String::new();
+    let mut total = 0;
     for fed_info in info.federations {
         let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
-        let mut processor = FederationEventProcessor::new(fed_info, conn.clone(), client).await?;
+        let mut processor =
+            FederationEventProcessor::new(fed_info, conn.clone(), client, telegram_client.clone())
+                .await?;
         processor.process_events().await?;
 
-        info!("{processor}");
+        message += format!("{processor}").as_str();
+        total += processor.total_events();
     }
 
+    message += format!("Total Events: {total}").as_str();
+    info!(message);
+    telegram_client.send_telegram_message(message).await;
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct TelegramClient {
+    bot_token: String,
+    chat_id: String,
+    client: reqwest::Client,
+}
+
+impl TelegramClient {
+    fn from_opts(opts: &GatewayETLOpts) -> TelegramClient {
+        TelegramClient {
+            bot_token: opts.bot_token.clone(),
+            chat_id: opts.chat_id.clone(),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    async fn send_telegram_message(&self, message: String) {
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+
+        let res = self
+            .client
+            .post(&url)
+            .json(&json!({
+                "chat_id": self.chat_id,
+                "text": message,
+            }))
+            .send()
+            .await;
+
+        match res {
+            Ok(response) => {
+                info!(
+                    "Successfully sent Telegram message! Response: {:?}",
+                    response
+                );
+            }
+            Err(err) => {
+                error!("Error sending message: {}", err);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +140,6 @@ impl DbConnection {
     }
 
     async fn connect(&self) -> anyhow::Result<Client> {
-        info!("Connecting to database...");
         let (pg_client, pg_connection) = tokio_postgres::connect(
             format!(
                 "host={} user={} password={} dbname={}",
