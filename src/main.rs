@@ -4,9 +4,12 @@ use fedimint_core::{anyhow, config::FederationId, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
 use fedimint_logging::TracingSetup;
 use ln_gateway::rpc::{rpc_client::GatewayRpcClient, PaymentLogPayload};
+use outgoing::Lnv1OutgoingPaymentStarted;
 use serde_json::Value;
 use tokio_postgres::{Client, NoTls};
 use tracing::{error, info, warn};
+
+mod outgoing;
 
 #[derive(Parser, Debug)]
 struct GatewayETLOpts {
@@ -54,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     for fed_info in info.federations {
         {
             let federation_id = fed_info.federation_id;
-            let fed_name = fed_info.federation_name.clone().expect("should be present");
+            let federation_name = fed_info.federation_name.clone().expect("should be present");
 
             let payment_log = client
                 .payment_log(PaymentLogPayload {
@@ -82,27 +85,8 @@ async fn main() -> anyhow::Result<()> {
                 let module = module.expect("Should be present").0.as_str().to_string();
                 match kind.as_str() {
                     "outgoing-payment-started" => {
-                        let contract_id = value["contract_id"]
-                            .as_str()
-                            .expect("Should be present")
-                            .to_string();
-                        let operation_id = value["operation_id"]
-                            .as_str()
-                            .expect("Should be present")
-                            .to_string();
-                        let amount = value["invoice_amount"].as_u64().expect("Should be present");
-                        insert_outgoing_payment_started(
-                            &pg_client,
-                            &log_id,
-                            module,
-                            timestamp,
-                            federation_id,
-                            fed_name.clone(),
-                            contract_id,
-                            amount,
-                            operation_id,
-                        )
-                        .await?;
+                        let outgoing_payment_started_event: Lnv1OutgoingPaymentStarted = serde_json::from_value(value).expect("Could not parse LNv1OutgoingPaymentStarted");
+                        outgoing_payment_started_event.insert(&pg_client, &log_id, timestamp, &federation_id, federation_name.clone()).await?;
                         outgoing_payment_started += 1;
                     }
                     "outgoing-payment-succeeded" => {
@@ -116,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
                         let timelock = value["outgoing_contract"]["contract"]["timelock"].as_u64().expect("Should be present");
                         let user_key = value["outgoing_contract"]["contract"]["user_key"].as_str().expect("Should be present").to_string();
                         let preimage = value["preimage"].as_str().expect("Should be present").to_string();
-                        insert_outgoing_payment_succeeded(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), contract_id, contract_amount as i64, gateway_key, payment_hash, timelock as i64, user_key, preimage).await?;
+                        insert_outgoing_payment_succeeded(&pg_client, &log_id, timestamp, federation_id, federation_name.clone(), contract_id, contract_amount as i64, gateway_key, payment_hash, timelock as i64, user_key, preimage).await?;
                         outgoing_payment_succeeded += 1;
                     }
                     "outgoing-payment-failed" => {
@@ -130,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
                         let timelock = value["outgoing_contract"]["contract"]["timelock"].as_u64().expect("Should be present");
                         let user_key = value["outgoing_contract"]["contract"]["user_key"].as_str().expect("Should be present").to_string();
                         let error_reason = extract_error_reason(value)?;
-                        insert_outgoing_payment_failed(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), contract_id, contract_amount as i64, gateway_key, payment_hash, timelock as i64, user_key, error_reason).await?;
+                        insert_outgoing_payment_failed(&pg_client, &log_id, timestamp, federation_id, federation_name.clone(), contract_id, contract_amount as i64, gateway_key, payment_hash, timelock as i64, user_key, error_reason).await?;
                         outgoing_payment_failed += 1;
                     }
                     "incoming-payment-started" => {
@@ -148,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
                             .as_str()
                             .expect("Should be present")
                             .to_string();
-                        insert_incoming_payment_started(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), contract_id, contract_amount as i64, invoice_amount as i64, operation_id, payment_hash).await?;
+                        insert_incoming_payment_started(&pg_client, &log_id, timestamp, federation_id, federation_name.clone(), contract_id, contract_amount as i64, invoice_amount as i64, operation_id, payment_hash).await?;
                         incoming_payment_started += 1;
                     }
                     "incoming-payment-succeeded" => {
@@ -160,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
                             .as_str()
                             .expect("Should be present")
                             .to_string();
-                        insert_incoming_payment_succeeded(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), payment_hash, preimage).await?;
+                        insert_incoming_payment_succeeded(&pg_client, &log_id, timestamp, federation_id, federation_name.clone(), payment_hash, preimage).await?;
                         incoming_payment_succeeded += 1;
                     }
                     "incoming-payment-failed" => {
@@ -172,7 +156,7 @@ async fn main() -> anyhow::Result<()> {
                             .as_str()
                             .expect("Should be present")
                             .to_string();
-                        insert_incoming_payment_failed(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), payment_hash, error).await?;
+                        insert_incoming_payment_failed(&pg_client, &log_id,timestamp, federation_id, federation_name.clone(), payment_hash, error).await?;
                         incoming_payment_failed += 1;
                     }
                     "complete-lightning-payment-succeeded" => {
@@ -180,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
                             .as_str()
                             .expect("Should be present")
                             .to_string();
-                        insert_complete_lightning_payment_succeeded(&pg_client, &log_id, module, timestamp, federation_id, fed_name.clone(), payment_hash).await?;
+                        insert_complete_lightning_payment_succeeded(&pg_client, &log_id, timestamp, federation_id, federation_name.clone(), payment_hash).await?;
                         complete_lightning_payment_succeeded += 1;
                     }
                     kind => {
@@ -224,7 +208,6 @@ fn extract_error_reason(data: Value) -> anyhow::Result<Option<String>> {
 async fn insert_complete_lightning_payment_succeeded(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -234,15 +217,14 @@ async fn insert_complete_lightning_payment_succeeded(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO complete_lightning_payment_succeeded (log_id, fedimint_module, ts, federation_id, federation_name, payment_hash) VALUES ($1, $2, $3, $4, $5, $6)",
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash]).await?;
+    pg_client.execute("INSERT INTO lnv1_complete_lightning_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash) VALUES ($1, $2, $3, $4, $5)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash]).await?;
     Ok(())
 }
 
 async fn insert_incoming_payment_failed(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -253,15 +235,14 @@ async fn insert_incoming_payment_failed(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO incoming_payment_failed (log_id, fedimint_module, ts, federation_id, federation_name, payment_hash, error_reason) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash, &error]).await?;
+    pg_client.execute("INSERT INTO lnv1_incoming_payment_failed (log_id, ts, federation_id, federation_name, payment_hash, error_reason) VALUES ($1, $2, $3, $4, $5, $6)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash, &error]).await?;
     Ok(())
 }
 
 async fn insert_incoming_payment_succeeded(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -272,15 +253,14 @@ async fn insert_incoming_payment_succeeded(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO incoming_payment_succeeded (log_id, fedimint_module, ts, federation_id, federation_name, payment_hash, preimage) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash, &preimage]).await?;
+    pg_client.execute("INSERT INTO lnv1_incoming_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash, preimage) VALUES ($1, $2, $3, $4, $5, $6)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &payment_hash, &preimage]).await?;
     Ok(())
 }
 
 async fn insert_incoming_payment_started(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -294,15 +274,14 @@ async fn insert_incoming_payment_started(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO incoming_payment_started (log_id, fedimint_module, ts, federation_id, federation_name, contract_id, contract_amount, invoice_amount, operation_id, payment_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-        &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &invoice_amount, &operation_id, &payment_hash]).await?;
+    pg_client.execute("INSERT INTO lnv1_incoming_payment_started (log_id, ts, federation_id, federation_name, contract_id, contract_amount, invoice_amount, operation_id, payment_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &invoice_amount, &operation_id, &payment_hash]).await?;
     Ok(())
 }
 
 async fn insert_outgoing_payment_failed(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -318,15 +297,14 @@ async fn insert_outgoing_payment_failed(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO outgoing_payment_failed (log_id, fedimint_module, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, error_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", 
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &gateway_key, &payment_hash, &timelock, &user_key, &error_reason]).await?;
+    pg_client.execute("INSERT INTO lnv1_outgoing_payment_failed (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, error_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &gateway_key, &payment_hash, &timelock, &user_key, &error_reason]).await?;
     Ok(())
 }
 
 async fn insert_outgoing_payment_succeeded(
     pg_client: &Client,
     log_id: &EventLogId,
-    module: String,
     ts: u64,
     federation_id: FederationId,
     federation_name: String,
@@ -342,28 +320,8 @@ async fn insert_outgoing_payment_succeeded(
     let timestamp = DateTime::from_timestamp_micros(ts as i64)
         .expect("Should convert DateTime correctly")
         .naive_utc();
-    pg_client.execute("INSERT INTO outgoing_payment_succeeded (log_id, fedimint_module, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, preimage) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", 
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &gateway_key, &payment_hash, &timelock, &user_key, &preimage]).await?;
-    Ok(())
-}
-
-async fn insert_outgoing_payment_started(
-    pg_client: &Client,
-    log_id: &EventLogId,
-    module: String,
-    ts: u64,
-    federation_id: FederationId,
-    federation_name: String,
-    contract_id: String,
-    amount: u64,
-    operation_id: String,
-) -> anyhow::Result<()> {
-    let log_id = parse_log_id(&log_id);
-    let timestamp = DateTime::from_timestamp_micros(ts as i64)
-        .expect("Should convert DateTime correctly")
-        .naive_utc();
-    pg_client.execute("INSERT INTO outgoing_payment_started (log_id, fedimint_module, ts, federation_id, federation_name, contract_id, invoice_amount, operation_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    &[&log_id, &module, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &(amount as i64), &operation_id]).await?;
+    pg_client.execute("INSERT INTO lnv1_outgoing_payment_succeeded (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, preimage) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &contract_id, &contract_amount, &gateway_key, &payment_hash, &timelock, &user_key, &preimage]).await?;
     Ok(())
 }
 
@@ -371,19 +329,19 @@ async fn get_max_log_id(pg_client: &Client) -> anyhow::Result<i64> {
     let query = "
         SELECT MAX(log_id)
         FROM (
-            SELECT log_id FROM outgoing_payment_started 
+            SELECT log_id FROM lnv1_outgoing_payment_started 
             UNION ALL
-            SELECT log_id FROM outgoing_payment_succeeded
+            SELECT log_id FROM lnv1_outgoing_payment_succeeded
             UNION ALL
-            SELECT log_id FROM outgoing_payment_failed
+            SELECT log_id FROM lnv1_outgoing_payment_failed
             UNION ALL
-            SELECT log_id FROM incoming_payment_started
+            SELECT log_id FROM lnv1_incoming_payment_started
             UNION ALL
-            SELECT log_id FROM incoming_payment_succeeded
+            SELECT log_id FROM lnv1_incoming_payment_succeeded
             UNION ALL
-            SELECT log_id FROM incoming_payment_failed
+            SELECT log_id FROM lnv1_incoming_payment_failed
             UNION ALL
-            SELECT log_id FROM complete_lightning_payment_succeeded
+            SELECT log_id FROM lnv1_complete_lightning_payment_succeeded
         ) AS combined_log_ids
     ";
 
@@ -428,7 +386,7 @@ fn parse_event_kind(input: String) -> String {
 }
 
 // TODO: Remove this once LogId can be used as a u64
-fn parse_log_id(log_id: &EventLogId) -> i64 {
+pub fn parse_log_id(log_id: &EventLogId) -> i64 {
     let input = format!("{log_id:?}");
     if let Some(start) = input.find('(') {
         if let Some(end) = input.find(')') {
