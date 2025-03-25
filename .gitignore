@@ -2,3 +2,4 @@
 /target-nix
 .vscode
 run-etl.sh
+release/
