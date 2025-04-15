@@ -2,15 +2,16 @@ use std::fmt;
 
 use fedimint_core::{anyhow, config::FederationId};
 use fedimint_eventlog::{EventKind, EventLogId};
-use ln_gateway::rpc::{rpc_client::GatewayRpcClient, FederationInfo, PaymentLogPayload};
+use fedimint_gateway_client::GatewayRpcClient;
+use fedimint_gateway_common::{FederationInfo, PaymentLogPayload};
 use serde_json::Value;
 use tokio_postgres::Client;
 use tracing::warn;
 
 use crate::{
-    parse_log_id, CompleteLightningPaymentSucceeded, DbConnection, LNv1IncomingPaymentFailed,
+    CompleteLightningPaymentSucceeded, DbConnection, LNv1IncomingPaymentFailed,
     LNv1IncomingPaymentStarted, LNv1IncomingPaymentSucceeded, LNv1OutgoingPaymentFailed,
-    LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded, TelegramClient,
+    LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded, TelegramClient, parse_log_id,
 };
 
 pub(crate) struct FederationEventProcessor {
@@ -34,17 +35,13 @@ impl fmt::Display for FederationEventProcessor {
         write!(
             f,
             "Federation: {}\n\
-            Outgoing Payments - Started: {}, Succeeded: {}, Failed: {}\n\
-            Incoming Payments - Started: {}, Succeeded: {}, Failed: {}\n\
-            Complete Lightning Payments Succeeded: {}\n\n",
+            Outgoing Payments - Succeeded: {}, Failed: {}\n\
+            Incoming Payments - Succeeded: {}, Failed: {}\n\n",
             self.federation_name,
-            self.outgoing_payment_started_count,
             self.outgoing_payment_succeeded_count,
             self.outgoing_payment_failed_count,
-            self.incoming_payment_started_count,
             self.incoming_payment_succeeded_count,
             self.incoming_payment_failed_count,
-            self.complete_lightning_payment_succeeded_count
         )
     }
 }
@@ -75,16 +72,6 @@ impl FederationEventProcessor {
             incoming_payment_failed_count: 0,
             complete_lightning_payment_succeeded_count: 0,
         })
-    }
-
-    pub fn total_events(&self) -> u64 {
-        self.outgoing_payment_started_count
-            + self.outgoing_payment_succeeded_count
-            + self.outgoing_payment_failed_count
-            + self.incoming_payment_started_count
-            + self.incoming_payment_succeeded_count
-            + self.incoming_payment_failed_count
-            + self.complete_lightning_payment_succeeded_count
     }
 
     async fn get_max_log_id(
@@ -133,14 +120,21 @@ impl FederationEventProcessor {
                 event_kinds: vec![],
             })
             .await?;
-        for (log_id, kind, module, timestamp, value) in payment_log.0 {
-            if parse_log_id(&log_id) <= self.max_log_id {
+
+        for entry in payment_log.0 {
+            if parse_log_id(&entry.event_id) <= self.max_log_id {
                 break;
             }
 
-            match module {
+            match entry.module {
                 Some((module, _)) if module.as_str() == "ln" => {
-                    self.handle_lnv1(log_id, kind, timestamp, value).await?;
+                    self.handle_lnv1(
+                        entry.event_id,
+                        entry.event_kind,
+                        entry.timestamp,
+                        entry.value,
+                    )
+                    .await?;
                 }
                 Some((module, _)) => {
                     warn!(module = %module, "Unsupported module");

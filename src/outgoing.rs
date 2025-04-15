@@ -1,7 +1,7 @@
 use chrono::DateTime;
 use fedimint_core::{anyhow, config::FederationId};
 use fedimint_eventlog::EventLogId;
-use serde::{de, Deserialize};
+use serde::{Deserialize, de};
 use serde_json::Value;
 use tokio_postgres::Client;
 

@@ -1,13 +1,16 @@
+use std::time::{Duration, UNIX_EPOCH};
+
 use clap::Parser;
 use federation_event_processor::FederationEventProcessor;
-use fedimint_core::{anyhow, util::SafeUrl};
+use fedimint_core::{anyhow, time::now, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
+use fedimint_gateway_client::GatewayRpcClient;
+use fedimint_gateway_common::PaymentSummaryPayload;
 use fedimint_logging::TracingSetup;
 use incoming::{
     CompleteLightningPaymentSucceeded, LNv1IncomingPaymentFailed, LNv1IncomingPaymentStarted,
     LNv1IncomingPaymentSucceeded,
 };
-use ln_gateway::rpc::rpc_client::GatewayRpcClient;
 use outgoing::{
     LNv1OutgoingPaymentFailed, LNv1OutgoingPaymentStarted, LNv1OutgoingPaymentSucceeded,
 };
@@ -60,7 +63,67 @@ async fn main() -> anyhow::Result<()> {
     let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
     let info = client.get_info().await?;
     let mut message = String::new();
-    let mut total = 0;
+    let now = now();
+    let now_millis = now
+        .duration_since(UNIX_EPOCH)
+        .expect("Before unix epoch")
+        .as_millis()
+        .try_into()?;
+    let one_day_ago = now
+        .checked_sub(Duration::from_secs(60 * 60 * 24))
+        .expect("Before unix epoch");
+    let one_day_ago_millis = one_day_ago
+        .duration_since(UNIX_EPOCH)
+        .expect("Before unix epoch")
+        .as_millis()
+        .try_into()?;
+    let summary = client
+        .payment_summary(PaymentSummaryPayload {
+            start_millis: one_day_ago_millis,
+            end_millis: now_millis,
+        })
+        .await?;
+
+    message += "===========24 HOUR SUMMARY===========\n";
+    message += format!(
+        "Outgoing Average Latency: {}ms\n",
+        summary
+            .outgoing
+            .average_latency
+            .unwrap_or_default()
+            .as_millis()
+    )
+    .as_str();
+    message += format!(
+        "Outgoing Median Latency: {}ms\n",
+        summary
+            .outgoing
+            .median_latency
+            .unwrap_or_default()
+            .as_millis()
+    )
+    .as_str();
+    message += format!("Outgoing Fees: {}\n", summary.outgoing.total_fees).as_str();
+    message += format!(
+        "Incoming Average Latency: {}ms\n",
+        summary
+            .incoming
+            .average_latency
+            .unwrap_or_default()
+            .as_millis()
+    )
+    .as_str();
+    message += format!(
+        "Incoming Median Latency: {}ms\n",
+        summary
+            .incoming
+            .median_latency
+            .unwrap_or_default()
+            .as_millis()
+    )
+    .as_str();
+    message += format!("Incoming Fees: {}\n\n", summary.incoming.total_fees).as_str();
+
     for fed_info in info.federations {
         let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
         let mut processor =
@@ -69,10 +132,8 @@ async fn main() -> anyhow::Result<()> {
         processor.process_events().await?;
 
         message += format!("{processor}").as_str();
-        total += processor.total_events();
     }
 
-    message += format!("Total Events: {total}").as_str();
     info!(message);
     telegram_client.send_telegram_message(message).await;
     Ok(())
