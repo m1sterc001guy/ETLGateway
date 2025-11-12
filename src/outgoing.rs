@@ -8,6 +8,121 @@ use tokio_postgres::Client;
 use crate::parse_log_id;
 
 #[derive(Debug, Clone)]
+pub(crate) struct LNv2OutgoingPaymentStarted {
+    invoice_amount: i64,
+    max_delay: i64,
+    min_contract_amount: i64,
+    operation_start: i64,
+    outgoing_contract: LNv2OutgoingContract,
+}
+
+impl<'de> Deserialize<'de> for LNv2OutgoingPaymentStarted {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+
+        let invoice_amount = value["invoice_amount"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("invoice_amount"))?
+            as i64;
+        let max_delay = value["max_delay"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("max_delay"))? as i64;
+        let min_contract_amount = value["min_contract_amount"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("min_contract_amount"))?
+            as i64;
+        let operation_start = value["operation_start"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("operation_start"))?
+            as i64;
+        let outgoing_contract: LNv2OutgoingContract =
+            serde_json::from_value(value["outgoing_contract"].clone())
+                .map_err(|e| de::Error::custom(e.to_string()))?;
+
+        Ok(Self {
+            invoice_amount,
+            max_delay,
+            min_contract_amount,
+            operation_start,
+            outgoing_contract,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2OutgoingContract {
+    amount: i64,
+    claim_pk: String,
+    ephemeral_pk: String,
+    expiration: i64,
+    payment_image: LNv2PaymentImage,
+    refund_pk: String,
+}
+
+impl<'de> Deserialize<'de> for LNv2OutgoingContract {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+
+        let amount = value["amount"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("amount"))? as i64;
+        let claim_pk = value["claim_pk"]
+            .as_str()
+            .ok_or_else(|| de::Error::missing_field("claim_pk"))?
+            .to_string();
+        let ephemeral_pk = value["ephemeral_pk"]
+            .as_str()
+            .ok_or_else(|| de::Error::missing_field("ephemeral_pk"))?
+            .to_string();
+        let expiration = value["expiration"]
+            .as_u64()
+            .ok_or_else(|| de::Error::missing_field("expiration"))? as i64;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .map_err(|e| de::Error::custom(e.to_string()))?;
+        let refund_pk = value["refund_pk"]
+            .as_str()
+            .ok_or_else(|| de::Error::missing_field("refund_pk"))?
+            .to_string();
+
+        Ok(Self {
+            amount,
+            claim_pk,
+            ephemeral_pk,
+            expiration,
+            payment_image,
+            refund_pk,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2PaymentImage {
+    hash: String,
+}
+
+impl<'de> Deserialize<'de> for LNv2PaymentImage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+
+        let hash = value["Hash"]
+            .as_str()
+            .ok_or_else(|| de::Error::missing_field("Hash"))?
+            .to_string();
+        Ok(Self { hash })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct LNv1OutgoingPaymentStarted {
     contract_id: String,
     amount: i64,
@@ -137,6 +252,32 @@ impl LNv1OutgoingPaymentSucceeded {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct LNv2OutgoingPaymentSucceeded {
+    payment_image: LNv2PaymentImage,
+    target_federation: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for LNv2OutgoingPaymentSucceeded {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .map_err(|e| de::Error::custom(e.to_string()))?;
+        let target_federation = value
+            .get("target_federation")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        Ok(Self {
+            payment_image,
+            target_federation,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct LNv1OutgoingPaymentFailed {
     contract_id: String,
     contract_amount: i64,
@@ -244,5 +385,32 @@ impl LNv1OutgoingPaymentFailed {
         pg_client.execute("INSERT INTO lnv1_outgoing_payment_failed (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, error_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
     &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.gateway_key, &self.payment_hash, &self.timelock, &self.user_key, &self.error_reason]).await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2OutgoingPaymentFailed {
+    payment_image: LNv2PaymentImage,
+    error: String,
+}
+
+impl<'de> Deserialize<'de> for LNv2OutgoingPaymentFailed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .map_err(|e| de::Error::custom(e.to_string()))?;
+        let error = value["error"]
+            .as_str()
+            .ok_or_else(|| de::Error::missing_field("error"))?
+            .to_string();
+
+        Ok(Self {
+            payment_image,
+            error,
+        })
     }
 }

@@ -74,6 +74,14 @@ CREATE TABLE lnv1_complete_lightning_payment_succeeded (
 	payment_hash TEXT NOT NULL
 );
 
+ALTER TABLE lnv1_outgoing_payment_started ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_outgoing_payment_succeeded ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_outgoing_payment_failed ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_incoming_payment_started ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_incoming_payment_succeeded ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_incoming_payment_failed ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+ALTER TABLE lnv1_complete_lightning_payment_succeeded ADD COLUMN gateway_epoch INT NOT NULL DEFAULT 0;
+
 
 DROP TABLE lnv1_outgoing_payment_started;
 DROP TABLE lnv1_outgoing_payment_succeeded;

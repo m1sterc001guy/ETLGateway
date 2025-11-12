@@ -8,7 +8,7 @@ use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::PaymentSummaryPayload;
 use fedimint_logging::TracingSetup;
 use incoming::{
-    CompleteLightningPaymentSucceeded, LNv1IncomingPaymentFailed, LNv1IncomingPaymentStarted,
+    LNv1CompleteLightningPaymentSucceeded, LNv1IncomingPaymentFailed, LNv1IncomingPaymentStarted,
     LNv1IncomingPaymentSucceeded,
 };
 use outgoing::{
@@ -51,6 +51,9 @@ struct GatewayETLOpts {
 
     #[arg(long = "db-name", env = "DB_NAME")]
     db_name: String,
+
+    #[arg(long = "gateway-epoch", env = "GW_EPOCH")]
+    gateway_epoch: i32,
 }
 
 #[tokio::main]
@@ -126,16 +129,21 @@ async fn main() -> anyhow::Result<()> {
 
     for fed_info in info.federations {
         let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
-        let mut processor =
-            FederationEventProcessor::new(fed_info, conn.clone(), client, telegram_client.clone())
-                .await?;
+        let mut processor = FederationEventProcessor::new(
+            fed_info,
+            conn.clone(),
+            client,
+            telegram_client.clone(),
+            opts.gateway_epoch,
+        )
+        .await?;
         processor.process_events().await?;
 
         message += format!("{processor}").as_str();
     }
 
     info!(message);
-    telegram_client.send_telegram_message(message).await;
+    //telegram_client.send_telegram_message(message).await;
     Ok(())
 }
 

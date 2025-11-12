@@ -5,7 +5,85 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio_postgres::Client;
 
-use crate::parse_log_id;
+use crate::{outgoing::LNv2PaymentImage, parse_log_id};
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2IncomingPaymentStarted {
+    incoming_contract_commitment: LNv2IncomingContractCommitment,
+    invoice_amount: i64,
+    operation_start: i64,
+}
+
+impl<'de> Deserialize<'de> for LNv2IncomingPaymentStarted {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let incoming_contract_commitment: LNv2IncomingContractCommitment =
+            serde_json::from_value(value["incoming_contract_commitment"].clone())
+                .expect("Could not parse LNv2PaymentImage");
+        let invoice_amount = value["invoice_amount"]
+            .as_i64()
+            .expect("amount should be present");
+        let operation_start = value["operation_start"]
+            .as_i64()
+            .expect("amount should be present");
+
+        Ok(Self {
+            incoming_contract_commitment,
+            invoice_amount,
+            operation_start,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2IncomingContractCommitment {
+    amount: i64,
+    claim_pk: String,
+    ephemeral_pk: String,
+    expiration: i64,
+    payment_image: LNv2PaymentImage,
+    refund_pk: String,
+}
+
+impl<'de> Deserialize<'de> for LNv2IncomingContractCommitment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let amount = value["amount"].as_i64().expect("amount should be present");
+        let claim_pk = value["claim_pk"]
+            .as_str()
+            .expect("Should be present")
+            .to_string();
+        let ephemeral_pk = value["ephemeral_pk"]
+            .as_str()
+            .expect("Should be present")
+            .to_string();
+        let expiration = value["expiration"]
+            .as_i64()
+            .expect("amount should be present");
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .expect("Could not parse LNv2PaymentImage");
+        let refund_pk = value["refund_pk"]
+            .as_str()
+            .expect("Should be present")
+            .to_string();
+
+        Ok(Self {
+            amount,
+            claim_pk,
+            ephemeral_pk,
+            expiration,
+            payment_image,
+            refund_pk,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct LNv1IncomingPaymentStarted {
@@ -120,6 +198,24 @@ impl LNv1IncomingPaymentSucceeded {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct LNv2IncomingPaymentSucceeded {
+    payment_image: LNv2PaymentImage,
+}
+
+impl<'de> Deserialize<'de> for LNv2IncomingPaymentSucceeded {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .expect("Could not parse payment_image");
+        Ok(Self { payment_image })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct LNv1IncomingPaymentFailed {
     payment_hash: String,
     error: String,
@@ -168,11 +264,38 @@ impl LNv1IncomingPaymentFailed {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CompleteLightningPaymentSucceeded {
+pub(crate) struct LNv2IncomingPaymentFailed {
+    payment_image: LNv2PaymentImage,
+    error: String,
+}
+
+impl<'de> Deserialize<'de> for LNv2IncomingPaymentFailed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .expect("Could not parse payment_image");
+        let error = value["error"]
+            .as_str()
+            .expect("Should be present")
+            .to_string();
+
+        Ok(Self {
+            payment_image,
+            error,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv1CompleteLightningPaymentSucceeded {
     payment_hash: String,
 }
 
-impl<'de> Deserialize<'de> for CompleteLightningPaymentSucceeded {
+impl<'de> Deserialize<'de> for LNv1CompleteLightningPaymentSucceeded {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -184,11 +307,11 @@ impl<'de> Deserialize<'de> for CompleteLightningPaymentSucceeded {
             .expect("Should be present")
             .to_string();
 
-        Ok(CompleteLightningPaymentSucceeded { payment_hash })
+        Ok(LNv1CompleteLightningPaymentSucceeded { payment_hash })
     }
 }
 
-impl CompleteLightningPaymentSucceeded {
+impl LNv1CompleteLightningPaymentSucceeded {
     pub async fn insert(
         &self,
         pg_client: &Client,
@@ -204,5 +327,23 @@ impl CompleteLightningPaymentSucceeded {
         pg_client.execute("INSERT INTO lnv1_complete_lightning_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash) VALUES ($1, $2, $3, $4, $5)",
     &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash]).await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LNv2CompleteLightningPaymentSucceeded {
+    payment_image: LNv2PaymentImage,
+}
+
+impl<'de> Deserialize<'de> for LNv2CompleteLightningPaymentSucceeded {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let payment_image: LNv2PaymentImage =
+            serde_json::from_value(value["payment_image"].clone())
+                .expect("Could not parse payment_image");
+        Ok(Self { payment_image })
     }
 }

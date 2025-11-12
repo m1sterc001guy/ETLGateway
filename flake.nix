@@ -1,34 +1,23 @@
 {
-  description = "Dev shell with nightly Rust and edition2024 support";
-
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    fedimint.url = "github:fedimint/fedimint?ref=v0.9.0";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, ... }:
+  outputs = { self, fedimint, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ rust-overlay.overlays.default ];
-        pkgs = import nixpkgs { inherit system overlays; };
-
-        rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-          extensions = [ "rust-src" ];
-        });
+        # Import the `devShells` from the fedimint flake
+        devShells = fedimint.devShells.${system};
       in {
-        devShells.default = pkgs.mkShell {
-          packages = [
-            rust
-            pkgs.sqlite
-            pkgs.just
-          ];
-
-          shellHook = ''
-            echo "🚀 Rust nightly with edition2024 and rust-src enabled!"
-            export RUSTC="${rust}/bin/rustc"
-            export CARGO="${rust}/bin/cargo"
-          '';
+        devShells = {
+          # You can expose all or specific shells from the original flake
+          default = devShells.default.overrideAttrs (old: {
+            nativeBuildInputs = old.nativeBuildInputs or [] ++ [
+              fedimint.packages.${system}.devimint
+              fedimint.packages.${system}.gateway-pkgs
+            ];
+          });
         };
       }
     );
