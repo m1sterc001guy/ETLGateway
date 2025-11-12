@@ -2,7 +2,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use clap::Parser;
 use federation_event_processor::FederationEventProcessor;
-use fedimint_core::{anyhow, time::now, util::SafeUrl};
+use fedimint_core::{Amount, anyhow, bitcoin, time::now, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
 use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::PaymentSummaryPayload;
@@ -87,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
 
+    let balances = client.get_balances().await?;
+
     message += "===========24 HOUR SUMMARY===========\n";
     message += format!(
         "Outgoing Average Latency: {}ms\n",
@@ -126,6 +128,11 @@ async fn main() -> anyhow::Result<()> {
     )
     .as_str();
     message += format!("Incoming Fees: {}\n\n", summary.incoming.total_fees).as_str();
+
+    let outbound = bitcoin::Amount::from_sat(balances.lightning_balance_msats / 1000);
+    message += format!("Lightning Outbound Liquidity: {outbound}\n").as_str();
+    let inbound = bitcoin::Amount::from_sat(balances.inbound_lightning_liquidity_msats / 1000);
+    message += format!("Lightning Inbound Liquidity: {inbound}\n\n").as_str();
 
     for fed_info in info.federations {
         let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
