@@ -2,7 +2,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use clap::Parser;
 use federation_event_processor::FederationEventProcessor;
-use fedimint_core::{Amount, anyhow, bitcoin, time::now, util::SafeUrl};
+use fedimint_core::{anyhow, bitcoin, time::now, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
 use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::PaymentSummaryPayload;
@@ -150,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!(message);
-    //telegram_client.send_telegram_message(message).await;
+    telegram_client.send_telegram_message(message).await;
     Ok(())
 }
 

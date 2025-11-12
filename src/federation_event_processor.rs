@@ -6,7 +6,7 @@ use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::{FederationInfo, PaymentLogPayload};
 use serde_json::Value;
 use tokio_postgres::Client;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::{
     DbConnection, LNv1CompleteLightningPaymentSucceeded, LNv1IncomingPaymentFailed,
@@ -106,6 +106,20 @@ impl FederationEventProcessor {
                 SELECT log_id FROM lnv1_incoming_payment_failed WHERE federation_id = $1 AND gateway_epoch = $2
                 UNION ALL
                 SELECT log_id FROM lnv1_complete_lightning_payment_succeeded WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_outgoing_payment_started WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_outgoing_payment_succeeded WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_outgoing_payment_failed WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_incoming_payment_started WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_incoming_payment_succeeded WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_incoming_payment_failed WHERE federation_id = $1 AND gateway_epoch = $2
+                UNION ALL
+                SELECT log_id FROM lnv2_complete_lightning_payment_succeeded WHERE federation_id = $1 AND gateway_epoch = $2
             ) AS combined_log_ids
         ";
 
@@ -115,11 +129,6 @@ impl FederationEventProcessor {
         if let Some(row) = rows.get(0) {
             let max_log_id: Option<i64> = row.get(0);
             if let Some(max_log_id) = max_log_id {
-                info!(
-                    ?max_log_id,
-                    ?federation_id,
-                    "Retrieved max_log_id for federation"
-                );
                 return Ok(max_log_id);
             }
         }
@@ -138,9 +147,7 @@ impl FederationEventProcessor {
             })
             .await?;
 
-        info!(payment_log_length = %payment_log.0.len(), "Payment Log Length.");
         for entry in payment_log.0 {
-            info!(log_id = ?entry.event_id, max_log_id = ?self.max_log_id, ?entry.timestamp, federation_id = ?self.federation_id, "Processing event with log id");
             if parse_log_id(&entry.event_id) <= self.max_log_id {
                 break;
             }
@@ -192,49 +199,108 @@ impl FederationEventProcessor {
         let kind = Self::parse_event_kind(format!("{kind:?}"));
         match kind.as_str() {
             "outgoing-payment-started" => {
-                //info!(?value, "OUTGOING PAYMENT STARTED VALUE");
                 let outgoing_payment_started_event: LNv2OutgoingPaymentStarted =
                     serde_json::from_value(value).expect("Could not parse event");
-                //info!(?outgoing_payment_started_event, "OUTGOING PAYMENT STARTED PARSED");
+                outgoing_payment_started_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.outgoing_payment_started_count += 1;
             }
             "outgoing-payment-succeeded" => {
-                //info!(?value, "OUTGOING PAYMENT SUCCEEDED VALUE");
                 let outgoing_payment_succeeded_event: LNv2OutgoingPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                //info!(?outgoing_payment_succeeded_event, "OUTGOING PAYMENT SUCEEDED PARSED");
+                outgoing_payment_succeeded_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.outgoing_payment_succeeded_count += 1;
             }
             "outgoing-payment-failed" => {
-                //info!(?value, "OUTGOING PAYMENT FAILED VALUE");
                 let outgoing_payment_failed_event: LNv2OutgoingPaymentFailed =
                     serde_json::from_value(value).expect("Could not parse event");
+                outgoing_payment_failed_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.outgoing_payment_failed_count += 1;
             }
             "incoming-payment-started" => {
-                //info!(?value, "INCOMING PAYMENT STARTED VALUE");
                 let incoming_payment_started_event: LNv2IncomingPaymentStarted =
                     serde_json::from_value(value).expect("Could not parse event");
-                //info!(?incoming_payment_started_event, "INCOMING PAYMENT STARTED PARSED");
+                incoming_payment_started_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.incoming_payment_started_count += 1;
             }
             "incoming-payment-succeeded" => {
-                //info!(?value, "INCOMING PAYMENT SUCCEEDED VALUE");
                 let incoming_payment_succeeded_event: LNv2IncomingPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                //info!(?incoming_payment_succeeded_event, "Incoming PAYMENT SUCEEDED PARSED");
+                incoming_payment_succeeded_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.incoming_payment_succeeded_count += 1;
             }
             "incoming-payment-failed" => {
                 let incoming_payment_failed_event: LNv2IncomingPaymentFailed =
                     serde_json::from_value(value).expect("Could not parse event");
+                incoming_payment_failed_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.incoming_payment_failed_count += 1;
             }
             "complete-lightning-payment-succeeded" => {
-                //info!(?value, "COMPLETE LIGHTNING PAYMENT SUCCEEDED VALUE");
                 let complete_lightning_payment_succeeded_event: LNv2CompleteLightningPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                //info!(?complete_lightning_payment_succeeded_event, "COMPLETE LIGHTNING PAYMENT SUCCEEDED PARSED");
+                complete_lightning_payment_succeeded_event
+                    .insert(
+                        &self.pg_client,
+                        &log_id,
+                        timestamp,
+                        &self.federation_id,
+                        self.federation_name.clone(),
+                        self.gw_epoch,
+                    )
+                    .await?;
                 self.complete_lightning_payment_succeeded_count += 1;
             }
             event => {
@@ -257,7 +323,6 @@ impl FederationEventProcessor {
             "outgoing-payment-started" => {
                 let outgoing_payment_started_event: LNv1OutgoingPaymentStarted =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 outgoing_payment_started_event
                     .insert(
                         &self.pg_client,
@@ -265,15 +330,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.outgoing_payment_started_count += 1;
             }
             "outgoing-payment-succeeded" => {
                 let outgoing_payment_succeeded_event: LNv1OutgoingPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 outgoing_payment_succeeded_event
                     .insert(
                         &self.pg_client,
@@ -281,15 +345,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.outgoing_payment_succeeded_count += 1;
             }
             "outgoing-payment-failed" => {
                 let outgoing_payment_failed_event: LNv1OutgoingPaymentFailed =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 outgoing_payment_failed_event
                     .insert(
                         &self.pg_client,
@@ -297,15 +360,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.outgoing_payment_failed_count += 1;
             }
             "incoming-payment-started" => {
                 let incoming_payment_started_event: LNv1IncomingPaymentStarted =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 incoming_payment_started_event
                     .insert(
                         &self.pg_client,
@@ -313,15 +375,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.incoming_payment_started_count += 1;
             }
             "incoming-payment-succeeded" => {
                 let incoming_payment_succeeded_event: LNv1IncomingPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 incoming_payment_succeeded_event
                     .insert(
                         &self.pg_client,
@@ -329,15 +390,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.incoming_payment_succeeded_count += 1;
             }
             "incoming-payment-failed" => {
                 let incoming_payment_failed_event: LNv1IncomingPaymentFailed =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 incoming_payment_failed_event
                     .insert(
                         &self.pg_client,
@@ -345,15 +405,14 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.incoming_payment_failed_count += 1;
             }
             "complete-lightning-payment-succeeded" => {
                 let complete_lightning_payment_succeeded_event: LNv1CompleteLightningPaymentSucceeded =
                     serde_json::from_value(value).expect("Could not parse event");
-                /*
                 complete_lightning_payment_succeeded_event
                     .insert(
                         &self.pg_client,
@@ -361,9 +420,9 @@ impl FederationEventProcessor {
                         timestamp,
                         &self.federation_id,
                         self.federation_name.clone(),
+                        self.gw_epoch,
                     )
                     .await?;
-                */
                 self.complete_lightning_payment_succeeded_count += 1;
             }
             event => {

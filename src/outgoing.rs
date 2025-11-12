@@ -52,6 +52,29 @@ impl<'de> Deserialize<'de> for LNv2OutgoingPaymentStarted {
     }
 }
 
+impl LNv2OutgoingPaymentStarted {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        let operation_start = DateTime::from_timestamp_micros(self.operation_start)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_outgoing_payment_started (log_id, ts, federation_id, federation_name, gateway_epoch, invoice_amount, max_delay, min_contract_amount, operation_start, amount, claim_pk, ephemeral_pk, expiration, payment_image, refund_pk) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.invoice_amount, &self.max_delay, &self.min_contract_amount, &operation_start, &self.outgoing_contract.amount, &self.outgoing_contract.claim_pk, &self.outgoing_contract.ephemeral_pk, &self.outgoing_contract.expiration, &self.outgoing_contract.payment_image.hash, &self.outgoing_contract.refund_pk]).await?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LNv2OutgoingContract {
     amount: i64,
@@ -104,7 +127,7 @@ impl<'de> Deserialize<'de> for LNv2OutgoingContract {
 
 #[derive(Debug, Clone)]
 pub(crate) struct LNv2PaymentImage {
-    hash: String,
+    pub(crate) hash: String,
 }
 
 impl<'de> Deserialize<'de> for LNv2PaymentImage {
@@ -164,13 +187,14 @@ impl LNv1OutgoingPaymentStarted {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_outgoing_payment_started (log_id, ts, federation_id, federation_name, contract_id, invoice_amount, operation_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &(self.amount as i64), &self.operation_id]).await?;
+        pg_client.execute("INSERT INTO lnv1_outgoing_payment_started (log_id, ts, federation_id, federation_name, contract_id, invoice_amount, operation_id, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &(self.amount as i64), &self.operation_id, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -240,13 +264,14 @@ impl LNv1OutgoingPaymentSucceeded {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_outgoing_payment_succeeded (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, preimage) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
-        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.gateway_key, &self.payment_hash, &self.timelock, &self.user_key, &self.preimage]).await?;
+        pg_client.execute("INSERT INTO lnv1_outgoing_payment_succeeded (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, preimage, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", 
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.gateway_key, &self.payment_hash, &self.timelock, &self.user_key, &self.preimage, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -274,6 +299,26 @@ impl<'de> Deserialize<'de> for LNv2OutgoingPaymentSucceeded {
             payment_image,
             target_federation,
         })
+    }
+}
+
+impl LNv2OutgoingPaymentSucceeded {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_outgoing_payment_succeeded (log_id, ts, federation_id, federation_name, gateway_epoch, payment_image, target_federation) VALUES ($1, $2, $3, $4, $5, $6, $7)", 
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.payment_image.hash, &self.target_federation]).await?;
+        Ok(())
     }
 }
 
@@ -377,13 +422,14 @@ impl LNv1OutgoingPaymentFailed {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_outgoing_payment_failed (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, error_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
-    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.gateway_key, &self.payment_hash, &self.timelock, &self.user_key, &self.error_reason]).await?;
+        pg_client.execute("INSERT INTO lnv1_outgoing_payment_failed (log_id, ts, federation_id, federation_name, contract_id, contract_amount, gateway_key, payment_hash, timelock, user_key, error_reason, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)", 
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.gateway_key, &self.payment_hash, &self.timelock, &self.user_key, &self.error_reason, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -412,5 +458,25 @@ impl<'de> Deserialize<'de> for LNv2OutgoingPaymentFailed {
             payment_image,
             error,
         })
+    }
+}
+
+impl LNv2OutgoingPaymentFailed {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_outgoing_payment_failed (log_id, ts, federation_id, federation_name, gateway_epoch, payment_image, error) VALUES ($1, $2, $3, $4, $5, $6, $7)", 
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.payment_image.hash, &self.error]).await?;
+        Ok(())
     }
 }

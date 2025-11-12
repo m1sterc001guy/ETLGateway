@@ -38,6 +38,29 @@ impl<'de> Deserialize<'de> for LNv2IncomingPaymentStarted {
     }
 }
 
+impl LNv2IncomingPaymentStarted {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        let operation_start = DateTime::from_timestamp_micros(self.operation_start as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_incoming_payment_started (log_id, ts, federation_id, federation_name, gateway_epoch, amount, claim_pk, ephemeral_pk, expiration, payment_image, refund_pk, invoice_amount, operation_start) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.incoming_contract_commitment.amount, &self.incoming_contract_commitment.claim_pk, &self.incoming_contract_commitment.ephemeral_pk, &self.incoming_contract_commitment.expiration, &self.incoming_contract_commitment.payment_image.hash, &self.incoming_contract_commitment.refund_pk, &self.invoice_amount, &operation_start]).await?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LNv2IncomingContractCommitment {
     amount: i64,
@@ -138,13 +161,14 @@ impl LNv1IncomingPaymentStarted {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_incoming_payment_started (log_id, ts, federation_id, federation_name, contract_id, contract_amount, invoice_amount, operation_id, payment_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.invoice_amount, &self.operation_id, &self.payment_hash]).await?;
+        pg_client.execute("INSERT INTO lnv1_incoming_payment_started (log_id, ts, federation_id, federation_name, contract_id, contract_amount, invoice_amount, operation_id, payment_hash, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.contract_id, &self.contract_amount, &self.invoice_amount, &self.operation_id, &self.payment_hash, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -186,13 +210,14 @@ impl LNv1IncomingPaymentSucceeded {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_incoming_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash, preimage) VALUES ($1, $2, $3, $4, $5, $6)",
-    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash, &self.preimage]).await?;
+        pg_client.execute("INSERT INTO lnv1_incoming_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash, preimage, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash, &self.preimage, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -212,6 +237,26 @@ impl<'de> Deserialize<'de> for LNv2IncomingPaymentSucceeded {
             serde_json::from_value(value["payment_image"].clone())
                 .expect("Could not parse payment_image");
         Ok(Self { payment_image })
+    }
+}
+
+impl LNv2IncomingPaymentSucceeded {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_incoming_payment_succeeded (log_id, ts, federation_id, federation_name, gateway_epoch, payment_image) VALUES ($1, $2, $3, $4, $5, $6)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.payment_image.hash]).await?;
+        Ok(())
     }
 }
 
@@ -252,13 +297,14 @@ impl LNv1IncomingPaymentFailed {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_incoming_payment_failed (log_id, ts, federation_id, federation_name, payment_hash, error_reason) VALUES ($1, $2, $3, $4, $5, $6)",
-    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash, &self.error]).await?;
+        pg_client.execute("INSERT INTO lnv1_incoming_payment_failed (log_id, ts, federation_id, federation_name, payment_hash, error_reason, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash, &self.error, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -287,6 +333,26 @@ impl<'de> Deserialize<'de> for LNv2IncomingPaymentFailed {
             payment_image,
             error,
         })
+    }
+}
+
+impl LNv2IncomingPaymentFailed {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_incoming_payment_failed (log_id, ts, federation_id, federation_name, gateway_epoch, payment_image, error) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.payment_image.hash, &self.error]).await?;
+        Ok(())
     }
 }
 
@@ -319,13 +385,14 @@ impl LNv1CompleteLightningPaymentSucceeded {
         timestamp: u64,
         federation_id: &FederationId,
         federation_name: String,
+        gateway_epoch: i32,
     ) -> anyhow::Result<()> {
         let log_id = parse_log_id(&log_id);
         let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
             .expect("Should convert DateTime correctly")
             .naive_utc();
-        pg_client.execute("INSERT INTO lnv1_complete_lightning_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash) VALUES ($1, $2, $3, $4, $5)",
-    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash]).await?;
+        pg_client.execute("INSERT INTO lnv1_complete_lightning_payment_succeeded (log_id, ts, federation_id, federation_name, payment_hash, gateway_epoch) VALUES ($1, $2, $3, $4, $5, $6)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &self.payment_hash, &gateway_epoch]).await?;
         Ok(())
     }
 }
@@ -345,5 +412,25 @@ impl<'de> Deserialize<'de> for LNv2CompleteLightningPaymentSucceeded {
             serde_json::from_value(value["payment_image"].clone())
                 .expect("Could not parse payment_image");
         Ok(Self { payment_image })
+    }
+}
+
+impl LNv2CompleteLightningPaymentSucceeded {
+    pub async fn insert(
+        &self,
+        pg_client: &Client,
+        log_id: &EventLogId,
+        timestamp: u64,
+        federation_id: &FederationId,
+        federation_name: String,
+        gateway_epoch: i32,
+    ) -> anyhow::Result<()> {
+        let log_id = parse_log_id(&log_id);
+        let timestamp = DateTime::from_timestamp_micros(timestamp as i64)
+            .expect("Should convert DateTime correctly")
+            .naive_utc();
+        pg_client.execute("INSERT INTO lnv2_complete_lightning_payment_succeeded (log_id, ts, federation_id, federation_name, gateway_epoch, payment_image) VALUES ($1, $2, $3, $4, $5, $6)",
+    &[&log_id, &timestamp, &federation_id.to_string(), &federation_name, &gateway_epoch, &self.payment_image.hash]).await?;
+        Ok(())
     }
 }
