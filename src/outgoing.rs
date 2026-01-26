@@ -4,6 +4,7 @@ use fedimint_eventlog::EventLogId;
 use serde::{Deserialize, de};
 use serde_json::Value;
 use tokio_postgres::Client;
+use tracing::info;
 
 use crate::parse_log_id;
 
@@ -446,12 +447,13 @@ impl<'de> Deserialize<'de> for LNv2OutgoingPaymentFailed {
         D: serde::Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
+        info!(?value, "LNv2 Outgoing Payment Failed");
         let payment_image: LNv2PaymentImage =
             serde_json::from_value(value["payment_image"].clone())
                 .map_err(|e| de::Error::custom(e.to_string()))?;
         let error = value["error"]
             .as_str()
-            .ok_or_else(|| de::Error::missing_field("error"))?
+            .unwrap_or("missing error field")
             .to_string();
 
         Ok(Self {

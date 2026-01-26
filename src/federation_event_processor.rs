@@ -1,6 +1,6 @@
 use std::fmt;
 
-use fedimint_core::{anyhow, config::FederationId};
+use fedimint_core::{anyhow, bitcoin, config::FederationId};
 use fedimint_eventlog::{EventKind, EventLogId};
 use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::{FederationInfo, PaymentLogPayload};
@@ -37,16 +37,20 @@ pub(crate) struct FederationEventProcessor {
     incoming_payment_failed_count: u64,
     complete_lightning_payment_succeeded_count: u64,
     gw_epoch: i32,
+    amount: fedimint_core::Amount,
 }
 
 impl fmt::Display for FederationEventProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let balance = bitcoin::Amount::from_sat(self.amount.msats / 1000);
         write!(
             f,
             "Federation: {}\n\
+            Balance: {}\n\
             Outgoing Payments - Succeeded: {}, Failed: {}\n\
             Incoming Payments - Succeeded: {}, Failed: {}\n\n",
             self.federation_name,
+            balance,
             self.outgoing_payment_succeeded_count,
             self.outgoing_payment_failed_count,
             self.incoming_payment_succeeded_count,
@@ -62,6 +66,7 @@ impl FederationEventProcessor {
         gw_client: GatewayRpcClient,
         telegram_client: TelegramClient,
         gw_epoch: i32,
+        amount: fedimint_core::Amount,
     ) -> anyhow::Result<FederationEventProcessor> {
         let pg_client = db_conn.connect().await?;
         let max_log_id = Self::get_max_log_id(&pg_client, fed_info.federation_id, gw_epoch).await?;
@@ -82,6 +87,7 @@ impl FederationEventProcessor {
             incoming_payment_failed_count: 0,
             complete_lightning_payment_succeeded_count: 0,
             gw_epoch,
+            amount,
         })
     }
 
@@ -148,6 +154,7 @@ impl FederationEventProcessor {
             .await?;
 
         for entry in payment_log.0 {
+            tracing::info!(max_log_id = ?self.max_log_id, entry_log_id = ?entry.event_id, federation_name = ?self.federation_name, "Processing event...");
             if parse_log_id(&entry.event_id) <= self.max_log_id {
                 break;
             }

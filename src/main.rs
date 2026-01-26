@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::time::{Duration, UNIX_EPOCH};
 
 use clap::Parser;
 use federation_event_processor::FederationEventProcessor;
-use fedimint_core::{anyhow, bitcoin, time::now, util::SafeUrl};
+use fedimint_core::{anyhow, bitcoin, config::FederationId, time::now, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
 use fedimint_gateway_client::GatewayRpcClient;
 use fedimint_gateway_common::PaymentSummaryPayload;
@@ -88,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let balances = client.get_balances().await?;
+    let fed_balances = balances.ecash_balances.iter().map(|info| (info.federation_id, info.ecash_balance_msats)).collect::<BTreeMap<FederationId, fedimint_core::Amount>>();
 
     message += "===========24 HOUR SUMMARY===========\n";
     message += format!(
@@ -136,12 +138,14 @@ async fn main() -> anyhow::Result<()> {
 
     for fed_info in info.federations {
         let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
+        let amount = fed_balances.get(&fed_info.federation_id).expect("No balance for joined federation");
         let mut processor = FederationEventProcessor::new(
             fed_info,
             conn.clone(),
             client,
             telegram_client.clone(),
             opts.gateway_epoch,
+            amount.clone(),
         )
         .await?;
         processor.process_events().await?;
