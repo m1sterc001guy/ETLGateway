@@ -1,9 +1,10 @@
 use std::fmt;
 
-use fedimint_core::{anyhow, bitcoin, config::FederationId};
+use fedimint_core::{anyhow, bitcoin, config::FederationId, util::SafeUrl};
 use fedimint_eventlog::{EventKind, EventLogId};
-use fedimint_gateway_client::GatewayRpcClient;
+use fedimint_gateway_client::payment_log;
 use fedimint_gateway_common::{FederationInfo, PaymentLogPayload};
+use fedimint_ln_common::client::GatewayApi;
 use serde_json::Value;
 use tokio_postgres::Client;
 use tracing::warn;
@@ -27,7 +28,7 @@ pub(crate) struct FederationEventProcessor {
     federation_name: String,
     max_log_id: i64,
     pg_client: Client,
-    gw_client: GatewayRpcClient,
+    gw_client: GatewayApi,
     telegram_client: TelegramClient,
     outgoing_payment_started_count: u64,
     outgoing_payment_succeeded_count: u64,
@@ -38,6 +39,7 @@ pub(crate) struct FederationEventProcessor {
     complete_lightning_payment_succeeded_count: u64,
     gw_epoch: i32,
     amount: fedimint_core::Amount,
+    base_url: SafeUrl,
 }
 
 impl fmt::Display for FederationEventProcessor {
@@ -63,10 +65,11 @@ impl FederationEventProcessor {
     pub async fn new(
         fed_info: FederationInfo,
         db_conn: DbConnection,
-        gw_client: GatewayRpcClient,
+        gw_client: GatewayApi,
         telegram_client: TelegramClient,
         gw_epoch: i32,
         amount: fedimint_core::Amount,
+        base_url: SafeUrl,
     ) -> anyhow::Result<FederationEventProcessor> {
         let pg_client = db_conn.connect().await?;
         let max_log_id = Self::get_max_log_id(&pg_client, fed_info.federation_id, gw_epoch).await?;
@@ -88,6 +91,7 @@ impl FederationEventProcessor {
             complete_lightning_payment_succeeded_count: 0,
             gw_epoch,
             amount,
+            base_url,
         })
     }
 
@@ -143,43 +147,40 @@ impl FederationEventProcessor {
     }
 
     pub async fn process_events(&mut self) -> anyhow::Result<()> {
-        let payment_log = self
-            .gw_client
-            .payment_log(PaymentLogPayload {
+        let payment_log = payment_log(&self.gw_client, &self.base_url, PaymentLogPayload {
                 end_position: None,
                 pagination_size: usize::MAX,
                 federation_id: self.federation_id,
                 event_kinds: vec![],
-            })
-            .await?;
+            }).await?;
 
         for entry in payment_log.0 {
-            tracing::info!(max_log_id = ?self.max_log_id, entry_log_id = ?entry.event_id, federation_name = ?self.federation_name, "Processing event...");
-            if parse_log_id(&entry.event_id) <= self.max_log_id {
+            tracing::info!(max_log_id = ?self.max_log_id, entry_log_id = ?entry.id(), federation_name = ?self.federation_name, "Processing event...");
+            if parse_log_id(&entry.id()) <= self.max_log_id {
                 break;
             }
 
-            match entry.module {
+            match &entry.module {
                 Some((module, _)) if module.as_str() == "ln" => {
                     self.handle_lnv1(
-                        entry.event_id,
-                        entry.event_kind,
-                        entry.timestamp,
-                        entry.value,
+                        entry.id(),
+                        entry.kind.clone(),
+                        entry.ts_usecs,
+                        serde_json::from_slice(&entry.payload)?,
                     )
                     .await?;
                 }
                 Some((module, _)) if module.as_str() == "lnv2" => {
                     self.handle_lnv2(
-                        entry.event_id,
-                        entry.event_kind,
-                        entry.timestamp,
-                        entry.value,
+                        entry.id(),
+                        entry.kind.clone(),
+                        entry.ts_usecs,
+                        serde_json::from_slice(&entry.payload)?,
                     )
                     .await?;
                 }
                 Some((module, _)) => {
-                    warn!(module = %module, ?entry.value, "Unsupported module");
+                    warn!(module = %module, "Unsupported module");
                     //self.telegram_client
                     //    .send_telegram_message(format!("Found unsupported module: {module}"))
                     //    .await;

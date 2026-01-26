@@ -3,10 +3,12 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use clap::Parser;
 use federation_event_processor::FederationEventProcessor;
+use fedimint_connectors::ConnectorRegistry;
 use fedimint_core::{anyhow, bitcoin, config::FederationId, time::now, util::SafeUrl};
 use fedimint_eventlog::EventLogId;
-use fedimint_gateway_client::GatewayRpcClient;
+use fedimint_gateway_client::{get_balances, get_info, payment_summary};
 use fedimint_gateway_common::PaymentSummaryPayload;
+use fedimint_ln_common::client::GatewayApi;
 use fedimint_logging::TracingSetup;
 use incoming::{
     LNv1CompleteLightningPaymentSucceeded, LNv1IncomingPaymentFailed, LNv1IncomingPaymentStarted,
@@ -64,8 +66,9 @@ async fn main() -> anyhow::Result<()> {
     let conn = DbConnection::from_opts(&opts);
 
     let telegram_client = TelegramClient::from_opts(&opts);
-    let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
-    let info = client.get_info().await?;
+    let connector_registry = ConnectorRegistry::build_from_client_defaults().with_env_var_overrides()?.bind().await?;
+    let client = GatewayApi::new(Some(opts.password.clone()), connector_registry.clone());
+    let info = get_info(&client, &opts.gateway_addr).await?;
     let mut message = String::new();
     let now = now();
     let now_millis = now
@@ -81,14 +84,12 @@ async fn main() -> anyhow::Result<()> {
         .expect("Before unix epoch")
         .as_millis()
         .try_into()?;
-    let summary = client
-        .payment_summary(PaymentSummaryPayload {
+    let summary = payment_summary(&client, &opts.gateway_addr, PaymentSummaryPayload {
             start_millis: one_day_ago_millis,
             end_millis: now_millis,
-        })
-        .await?;
+        }).await?;
 
-    let balances = client.get_balances().await?;
+    let balances = get_balances(&client, &opts.gateway_addr).await?;
     let fed_balances = balances.ecash_balances.iter().map(|info| (info.federation_id, info.ecash_balance_msats)).collect::<BTreeMap<FederationId, fedimint_core::Amount>>();
 
     message += "===========24 HOUR SUMMARY===========\n";
@@ -137,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     message += format!("Lightning Inbound Liquidity: {inbound}\n\n").as_str();
 
     for fed_info in info.federations {
-        let client = GatewayRpcClient::new(opts.gateway_addr.clone(), Some(opts.password.clone()));
+        let client = GatewayApi::new(Some(opts.password.clone()), connector_registry.clone());
         let amount = fed_balances.get(&fed_info.federation_id).expect("No balance for joined federation");
         let mut processor = FederationEventProcessor::new(
             fed_info,
@@ -146,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
             telegram_client.clone(),
             opts.gateway_epoch,
             amount.clone(),
+            opts.gateway_addr.clone(),
         )
         .await?;
         processor.process_events().await?;
